@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -lt 1 || $# -gt 3 ]]; then
+  echo "usage: ac-new-all <contest> [auto|count|tasks] [base_dir]" >&2
+  echo "example: ac-new-all abc410" >&2
+  echo "example: ac-new-all abc410 auto work/abc410" >&2
+  echo "example: ac-new-all abc410 6" >&2
+  echo "example: ac-new-all abc410 a,b,c,d" >&2
+  exit 1
+fi
+
+contest="${1,,}"
+task_spec="${2:-auto}"
+base_dir="${3:-work/${contest}}"
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ac_new="${script_dir}/ac-new"
+
+if [[ ! -x "${ac_new}" ]]; then
+  echo "error: ac-new not found or not executable: ${ac_new}" >&2
+  exit 1
+fi
+
+normalize_task_list() {
+  local raw="$1"
+  echo "${raw}" | tr '[:upper:]' '[:lower:]' | tr ', ' '\n\n' | sed '/^$/d'
+}
+
+generate_tasks_by_count() {
+  local n="$1"
+  local alphabet="abcdefghijklmnopqrstuvwxyz"
+  local i=0
+
+  if ! [[ "${n}" =~ ^[0-9]+$ ]]; then
+    echo "error: count must be numeric: ${n}" >&2
+    return 1
+  fi
+  if (( n <= 0 )); then
+    echo "error: count must be >= 1" >&2
+    return 1
+  fi
+  if (( n > 26 )); then
+    echo "error: count must be <= 26" >&2
+    return 1
+  fi
+
+  while (( i < n )); do
+    echo "${alphabet:i:1}"
+    i=$((i + 1))
+  done
+}
+
+detect_tasks_auto() {
+  local contest_id="$1"
+  local url="https://atcoder.jp/contests/${contest_id}/tasks"
+
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "error: curl is required for auto task detection" >&2
+    return 1
+  fi
+
+  local extracted
+  extracted="$(curl -fsSL "${url}" \
+    | grep -oE "/contests/${contest_id}/tasks/${contest_id}_[a-z]+" \
+    | sed -E "s#.*/${contest_id}_([a-z]+)#\\1#" \
+    | grep -E '^[a-z]$' \
+    | sort -u || true)"
+
+  if [[ -z "${extracted}" ]]; then
+    echo "error: failed to detect tasks automatically for ${contest_id}" >&2
+    echo "hint: specify count manually, e.g. ac-new-all ${contest_id} 7" >&2
+    return 1
+  fi
+
+  echo "${extracted}"
+}
+
+task_url_exists() {
+  local url="$1"
+  if ! command -v curl >/dev/null 2>&1; then
+    return 0
+  fi
+  curl -fsS -o /dev/null "${url}"
+}
+
+mapfile -t tasks < <(
+  if [[ "${task_spec}" == "auto" ]]; then
+    detect_tasks_auto "${contest}"
+  elif [[ "${task_spec}" =~ ^[0-9]+$ ]]; then
+    generate_tasks_by_count "${task_spec}"
+  else
+    normalize_task_list "${task_spec}"
+  fi
+)
+
+if [[ ${#tasks[@]} -eq 0 ]]; then
+  echo "error: no tasks resolved" >&2
+  exit 1
+fi
+
+mkdir -p "${base_dir}"
+
+ok=0
+ng=0
+
+for task in "${tasks[@]}"; do
+  url="https://atcoder.jp/contests/${contest}/tasks/${contest}_${task}"
+  echo "==> ${contest} ${task}"
+
+  if ! task_url_exists "${url}"; then
+    echo "warning: task URL not found, skipped: ${url}" >&2
+    ng=$((ng + 1))
+    continue
+  fi
+
+  if "${ac_new}" "${contest}" "${task}" "${base_dir}/${task}"; then
+    ok=$((ok + 1))
+  else
+    ng=$((ng + 1))
+  fi
+done
+
+echo
+echo "done: success=${ok}, failed=${ng}"
+
+if [[ ${ng} -gt 0 ]]; then
+  exit 1
+fi

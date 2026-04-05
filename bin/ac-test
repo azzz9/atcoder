@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+src="${1:-main.cpp}"
+out="./a.out"
+
+if [[ ! -f "$src" ]]; then
+  echo "error: source file not found: $src" >&2
+  exit 1
+fi
+
+"${CXX:-g++}" ${CXXFLAGS:-"-std=gnu++20 -O2"} "$src" -o "$out"
+
+if [[ -d test ]]; then
+  oj t -c "$out"
+else
+  echo "warning: ./test not found. run: ac-new <contest> <task>" >&2
+fi

@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+src="${1:-$HOME/atcoder/cookies.txt}"
+dst="${2:-$HOME/.local/share/online-judge-tools/cookie.jar}"
+
+if [[ ! -f "$src" ]]; then
+  echo "error: source cookies file not found: $src" >&2
+  echo "usage: ac-cookie-import [cookies.txt] [cookie.jar]" >&2
+  exit 1
+fi
+
+python3 - "$src" "$dst" <<'PY'
+import sys
+from pathlib import Path
+from http.cookiejar import MozillaCookieJar, LWPCookieJar
+
+src = Path(sys.argv[1])
+dst = Path(sys.argv[2])
+dst.parent.mkdir(parents=True, exist_ok=True)
+
+moz = MozillaCookieJar()
+moz.load(str(src), ignore_discard=True, ignore_expires=True)
+
+lwp = LWPCookieJar()
+for cookie in moz:
+    lwp.set_cookie(cookie)
+
+lwp.save(str(dst), ignore_discard=True, ignore_expires=True)
+print(f"saved: {dst} ({len(list(lwp))} cookies)")
+PY
+
+chmod 600 "$dst"
+echo "permissions: 600 $dst"

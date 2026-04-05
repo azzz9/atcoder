@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+src="${1:-main.cpp}"
+url="${2:-}"
+
+if [[ ! -f "$src" ]]; then
+  echo "error: source file not found: $src" >&2
+  exit 1
+fi
+
+if [[ -z "$url" && -f .task-url ]]; then
+  url="$(<.task-url)"
+fi
+
+if [[ -z "$url" ]]; then
+  echo "usage: ac-submit [src] [url]" >&2
+  echo "or place .task-url in current directory" >&2
+  exit 1
+fi
+
+oj submit --yes "$url" "$src"

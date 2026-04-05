@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -lt 2 || $# -gt 3 ]]; then
+  echo "usage: ac-new <contest> <task> [dir]" >&2
+  echo "example: ac-new abc410 a" >&2
+  exit 1
+fi
+
+contest="${1,,}"
+task="${2,,}"
+target_dir="${3:-work/${contest}/${task}}"
+url="https://atcoder.jp/contests/${contest}/tasks/${contest}_${task}"
+
+mkdir -p "$target_dir"
+
+src="$target_dir/main.cpp"
+if [[ -e "$src" ]]; then
+  echo "error: $src already exists" >&2
+  exit 1
+fi
+
+if [[ -n "${ATCODER_TEMPLATE:-}" && -f "${ATCODER_TEMPLATE}" ]]; then
+  cp "$ATCODER_TEMPLATE" "$src"
+else
+  cat > "$src" <<'CPP'
+#include <bits/stdc++.h>
+using namespace std;
+
+int main() {
+  ios::sync_with_stdio(false);
+  cin.tie(nullptr);
+
+  return 0;
+}
+CPP
+fi
+
+printf '%s\n' "$url" > "$target_dir/.task-url"
+
+echo "created: $src"
+echo "task url: $url"
+
+if command -v oj >/dev/null 2>&1; then
+  (
+    cd "$target_dir"
+    if oj d "$url"; then
+      echo "downloaded samples into $target_dir/test"
+    else
+      echo "warning: failed to download samples (check contest/task id or login state)" >&2
+    fi
+  )
+else
+  echo "warning: oj command not found" >&2
+fi
