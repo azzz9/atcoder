@@ -36,6 +36,9 @@ int main() {
 CPP
 fi
 
+# Ensure the source is editable even if template permissions are restrictive.
+chmod u+rw,go+r "$src"
+
 printf '%s\n' "$url" > "$target_dir/.task-url"
 
 echo "created: $src"

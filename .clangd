@@ -1,0 +1,10 @@
+CompileFlags:
+  Compiler: g++
+  Add:
+    - -std=gnu++20
+    - -O2
+    - -Wall
+    - -Wextra
+    - -Wshadow
+    - -Wconversion
+    - -Wno-sign-conversion

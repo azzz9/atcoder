@@ -27,18 +27,11 @@
             ];
 
             shellHook = ''
-              # Prefer zsh for interactive `nix develop` sessions.
-              # Keep non-interactive `nix develop -c ...` behavior unchanged.
-              if [[ -t 0 && -t 1 && -z "''${ZSH_VERSION:-}" && -z "''${ATCODER_NIX_ZSH_BOOTSTRAPPED:-}" ]]; then
-                export ATCODER_NIX_ZSH_BOOTSTRAPPED=1
-                export SHELL=${pkgs.zsh}/bin/zsh
-                exec ${pkgs.zsh}/bin/zsh -l
-              fi
-
+              # Resolve root relative to this flake so commands also work when
+              # entering the shell from outside the repository directory.
+              export ATCODER_ROOT="${toString ./.}"
               if git_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
                 export ATCODER_ROOT="$git_root"
-              else
-                export ATCODER_ROOT="$PWD"
               fi
               export CXX=${pkgs.gcc}/bin/g++
               export CXXFLAGS="-std=gnu++20 -O2 -Wall -Wextra -Wshadow -Wconversion -Wno-sign-conversion"
@@ -84,6 +77,17 @@ local function filter_ai_sources(sources)
   return filtered
 end
 
+local cmp_capabilities = nil
+do
+  local ok_cmp_lsp, cmp_lsp = pcall(require, "cmp_nvim_lsp")
+  if ok_cmp_lsp and type(cmp_lsp.default_capabilities) == "function" then
+    local ok_caps, caps = pcall(cmp_lsp.default_capabilities)
+    if ok_caps and type(caps) == "table" then
+      cmp_capabilities = caps
+    end
+  end
+end
+
 local function stop_ai_clients(bufnr)
   if not (vim.lsp and vim.lsp.get_clients) then
     return
@@ -99,6 +103,16 @@ local function stop_ai_clients(bufnr)
       end)
     end
   end
+end
+
+local function disable_inline_completion(bufnr)
+  pcall(function()
+    local inline = vim.lsp and vim.lsp.inline_completion
+    if inline and inline.enable then
+      inline.enable(false, { bufnr = bufnr })
+    end
+  end)
+  pcall(vim.keymap.del, "i", "<Tab>", { buffer = bufnr })
 end
 
 vim.g.copilot_enabled = false
@@ -239,6 +253,7 @@ local function ensure_clangd(bufnr)
     name = "clangd",
     cmd = { exepath },
     root_dir = root,
+    capabilities = cmp_capabilities,
   })
 end
 if not clangd_enabled_via_core then
@@ -253,11 +268,16 @@ vim.api.nvim_create_autocmd("LspAttach", {
   callback = function(args)
     disable_copilot_buffer(args.buf)
     stop_ai_clients(args.buf)
+    disable_inline_completion(args.buf)
   end,
 })
 vim.schedule(function()
   pcall(vim.cmd, "silent! Copilot disable")
   stop_ai_clients()
+  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+    ensure_clangd(bufnr)
+    disable_inline_completion(bufnr)
+  end
 end)
 
 -- Remove copilot source from cmp if present.
@@ -280,6 +300,15 @@ LUA
               echo "[atcoder] contest shell loaded"
               echo "[atcoder] commands: ac-new, ac-new-all, ac-test, ac-submit"
               echo "[atcoder] nvim: base config + AI integrations disabled"
+
+              # Prefer zsh for interactive `nix develop` sessions.
+              # Keep non-interactive `nix develop -c ...` behavior unchanged.
+              # Run this at the end so PATH/setup above is preserved.
+              if [[ -t 0 && -t 1 && -z "''${ZSH_VERSION:-}" && -z "''${ATCODER_NIX_ZSH_BOOTSTRAPPED:-}" ]]; then
+                export ATCODER_NIX_ZSH_BOOTSTRAPPED=1
+                export SHELL=${pkgs.zsh}/bin/zsh
+                exec ${pkgs.zsh}/bin/zsh -l
+              fi
             '';
           };
         }
