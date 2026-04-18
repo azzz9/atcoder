@@ -1,0 +1,360 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import html
+import os
+import re
+import sys
+from http.cookiejar import LWPCookieJar
+from pathlib import Path
+from urllib.parse import urlparse
+from urllib.parse import urlencode
+from urllib.request import HTTPCookieProcessor, Request, build_opener
+from urllib.error import HTTPError, URLError
+
+
+USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/135.0.0.0 Safari/537.36"
+)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="ac-submit-direct",
+        description="Submit to AtCoder directly with cookie.jar (without oj submit, C++ fixed).",
+    )
+    parser.add_argument("src", nargs="?", default="main.cpp", help="source file path")
+    parser.add_argument("url", nargs="?", default="", help="task URL")
+    parser.add_argument(
+        "--cookie",
+        default=os.environ.get(
+            "OJ_COOKIE_JAR", "~/.local/share/online-judge-tools/cookie.jar"
+        ),
+        help="cookie jar path (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--lang-id",
+        default=os.environ.get("AC_LANG_ID", ""),
+        help="explicit AtCoder language id",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="validate page parsing and selected language without submitting",
+    )
+    return parser.parse_args()
+
+
+def parse_task_url(url: str) -> tuple[str, str]:
+    parsed = urlparse(url)
+    m = re.search(r"^/contests/([^/]+)/tasks/([^/]+)$", parsed.path)
+    if not m:
+        raise ValueError(f"unsupported task URL: {url}")
+    return m.group(1), m.group(2)
+
+
+def load_session(cookie_path: Path):
+    if not cookie_path.exists():
+        raise FileNotFoundError(f"cookie jar not found: {cookie_path}")
+
+    jar = LWPCookieJar(str(cookie_path))
+    jar.load(ignore_discard=True, ignore_expires=True)
+
+    opener = build_opener(HTTPCookieProcessor(jar))
+    return opener, jar
+
+
+def http_get(opener, url: str, *, referer: str = "") -> tuple[int, str, str]:
+    req = Request(url, method="GET")
+    req.add_header("User-Agent", USER_AGENT)
+    req.add_header(
+        "Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    )
+    req.add_header("Accept-Language", "ja,en-US;q=0.9,en;q=0.8")
+    if referer:
+        req.add_header("Referer", referer)
+
+    with opener.open(req, timeout=30) as resp:
+        charset = resp.headers.get_content_charset() or "utf-8"
+        text = resp.read().decode(charset, errors="replace")
+        return resp.status, resp.geturl(), text
+
+
+def http_post(
+    opener, url: str, form_data: dict[str, str], *, referer: str
+) -> tuple[int, str, str]:
+    data = urlencode(form_data).encode("utf-8")
+    req = Request(url, data=data, method="POST")
+    req.add_header("User-Agent", USER_AGENT)
+    req.add_header(
+        "Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    )
+    req.add_header("Accept-Language", "ja,en-US;q=0.9,en;q=0.8")
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    req.add_header("Referer", referer)
+
+    with opener.open(req, timeout=30) as resp:
+        charset = resp.headers.get_content_charset() or "utf-8"
+        text = resp.read().decode(charset, errors="replace")
+        return resp.status, resp.geturl(), text
+
+
+def parse_attrs(tag: str) -> dict[str, str]:
+    attrs: dict[str, str] = {}
+    for key, val in re.findall(
+        r"""([^\s=/>]+)\s*=\s*(".*?"|'.*?'|[^\s>]+)""", tag, flags=re.S
+    ):
+        val = val.strip()
+        if val and val[0] in ("'", '"') and val[-1] == val[0]:
+            val = val[1:-1]
+        attrs[key.lower()] = html.unescape(val)
+    return attrs
+
+
+def find_csrf_token(page: str) -> str:
+    for m in re.finditer(r"<input\b[^>]*>", page, flags=re.I | re.S):
+        attrs = parse_attrs(m.group(0))
+        if attrs.get("name") == "csrf_token":
+            token = attrs.get("value", "")
+            if token:
+                return token
+    raise RuntimeError("csrf_token not found on submit page")
+
+
+def extract_select_options(page: str, name: str) -> list[tuple[str, str]]:
+    pattern = (
+        r"<select\b[^>]*\bname=['\"]"
+        + re.escape(name)
+        + r"['\"][^>]*>(.*?)</select>"
+    )
+    m = re.search(pattern, page, flags=re.I | re.S)
+    if not m:
+        raise RuntimeError(f'select "{name}" not found on submit page')
+
+    options: list[tuple[str, str]] = []
+    body = m.group(1)
+    for op in re.finditer(r"<option\b([^>]*)>(.*?)</option>", body, flags=re.I | re.S):
+        attrs = parse_attrs(op.group(1))
+        value = attrs.get("value", "")
+        if value == "":
+            continue
+        label = re.sub(r"<[^>]+>", "", op.group(2))
+        label = html.unescape(label).strip()
+        options.append((value, label))
+
+    if not options:
+        raise RuntimeError(f'no options found for select "{name}"')
+    return options
+
+
+def extract_select_options_from_block(block: str) -> list[tuple[str, str]]:
+    m = re.search(r"<select\b[^>]*>(.*?)</select>", block, flags=re.I | re.S)
+    if not m:
+        return []
+    body = m.group(1)
+    options: list[tuple[str, str]] = []
+    for op in re.finditer(r"<option\b([^>]*)>(.*?)</option>", body, flags=re.I | re.S):
+        attrs = parse_attrs(op.group(1))
+        value = attrs.get("value", "")
+        if value == "":
+            continue
+        label = re.sub(r"<[^>]+>", "", op.group(2))
+        label = html.unescape(label).strip()
+        options.append((value, label))
+    return options
+
+
+def extract_language_options(page: str, task_screen_name: str) -> list[tuple[str, str]]:
+    # Legacy format: select has name="data.LanguageId"
+    try:
+        return extract_select_options(page, "data.LanguageId")
+    except RuntimeError:
+        pass
+
+    # Current format: language select lives under div id="select-lang-<task>".
+    marker = f'id="select-lang-{task_screen_name}"'
+    idx = page.find(marker)
+    if idx == -1:
+        marker = f"id='select-lang-{task_screen_name}'"
+        idx = page.find(marker)
+    if idx == -1:
+        raise RuntimeError(
+            f'language selector block not found: select-lang-{task_screen_name}'
+        )
+
+    block = page[idx : idx + 400_000]
+    options = extract_select_options_from_block(block)
+    if not options:
+        raise RuntimeError("language options not found in task language block")
+    return options
+
+
+def choose_language(
+    options: list[tuple[str, str]],
+    explicit_lang_id: str,
+) -> tuple[str, str]:
+    if explicit_lang_id:
+        for value, label in options:
+            if value == explicit_lang_id:
+                return value, label
+        raise RuntimeError(f"--lang-id not found on page: {explicit_lang_id}")
+
+    patterns = [
+        r"C\+\+\s*23.*GCC",
+        r"C\+\+.*GCC",
+        r"C\+\+\s*23",
+        r"C\+\+",
+    ]
+
+    for pat in patterns:
+        rx = re.compile(pat, flags=re.I)
+        for value, label in options:
+            if rx.search(label):
+                return value, label
+
+    raise RuntimeError("no C++ language option found on submit page")
+
+
+def is_submission_success(url: str) -> bool:
+    return bool(
+        re.search(r"/contests/[^/]+/submissions/\d+$", url)
+        or re.search(r"/contests/[^/]+/submissions/me$", url)
+    )
+
+
+def extract_error_message(page: str) -> str:
+    if has_cloudflare_turnstile(page):
+        return (
+            "Cloudflare Turnstile challenge is required. "
+            "This needs a browser-issued Turnstile token "
+            "(`cf-turnstile-response`), so pure terminal HTTP submit is blocked."
+        )
+
+    m = re.search(r"AtCoder says:\s*×\s*([^<\n]+)", page)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"×\s*([^<\n]+)", page)
+    if m:
+        return m.group(1).strip()
+
+    # Fallback: alert block text.
+    m = re.search(
+        r'<div[^>]*class=["\'][^"\']*alert[^"\']*["\'][^>]*>(.*?)</div>',
+        page,
+        re.I | re.S,
+    )
+    if m:
+        text = re.sub(r"<[^>]+>", " ", m.group(1))
+        text = html.unescape(" ".join(text.split())).strip()
+        if text:
+            return text
+    return "unknown error"
+
+
+def has_cloudflare_turnstile(page: str) -> bool:
+    lower = page.lower()
+    return (
+        "challenges.cloudflare.com/turnstile" in lower
+        or "cf-challenge" in lower
+        or "cf-turnstile" in lower
+    )
+
+
+def main() -> int:
+    args = parse_args()
+
+    src_path = Path(args.src)
+    if not src_path.exists():
+        print(f"error: source file not found: {src_path}", file=sys.stderr)
+        return 1
+
+    task_url = args.url
+    if not task_url:
+        task_url_file = Path(".task-url")
+        if task_url_file.exists():
+            task_url = task_url_file.read_text(encoding="utf-8").strip()
+    if not task_url:
+        print(
+            "error: task URL is required (arg or .task-url in current directory)",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        contest_id, task_screen_name = parse_task_url(task_url)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+
+    submit_url = f"https://atcoder.jp/contests/{contest_id}/submit"
+    cookie_path = Path(args.cookie).expanduser()
+
+    try:
+        opener, _ = load_session(cookie_path)
+    except Exception as e:
+        print(f"error: failed to load cookie jar: {e}", file=sys.stderr)
+        return 1
+
+    try:
+        _, submit_page_url, submit_page = http_get(opener, submit_url)
+
+        csrf_token = find_csrf_token(submit_page)
+        task_options = extract_select_options(submit_page, "data.TaskScreenName")
+        language_options = extract_language_options(submit_page, task_screen_name)
+
+        available_tasks = {value for value, _ in task_options}
+        if task_screen_name not in available_tasks:
+            print(
+                "error: task is not available on submit page. "
+                "Join contest/virtual first and ensure the URL is correct.",
+                file=sys.stderr,
+            )
+            return 1
+
+        language_id, language_label = choose_language(
+            language_options, args.lang_id
+        )
+        source_code = src_path.read_text(encoding="utf-8")
+
+        if args.dry_run:
+            print("[DRY-RUN] parsed submit page successfully")
+            print(f"[DRY-RUN] task: {task_screen_name}")
+            print(f"[DRY-RUN] language: {language_id} ({language_label})")
+            return 0
+
+        payload = {
+            "data.TaskScreenName": task_screen_name,
+            "data.LanguageId": language_id,
+            "sourceCode": source_code,
+            "csrf_token": csrf_token,
+        }
+
+        _, final_url, final_page = http_post(
+            opener, submit_url, payload, referer=submit_page_url or submit_url
+        )
+
+        if is_submission_success(final_url):
+            print(f"[SUCCESS] submitted: {final_url}")
+            print(f"[INFO] language: {language_id} ({language_label})")
+            return 0
+
+        message = extract_error_message(final_page)
+        print(f"[FAILURE] submission failed: {message}", file=sys.stderr)
+        print(f"[INFO] final url: {final_url}", file=sys.stderr)
+        return 1
+    except HTTPError as e:
+        print(f"error: HTTP {e.code}: {e.reason}", file=sys.stderr)
+        return 1
+    except URLError as e:
+        print(f"error: network failure: {e.reason}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"error: submit failed: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

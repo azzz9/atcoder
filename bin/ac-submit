@@ -1,6 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+backend="${AC_SUBMIT_BACKEND:-auto}" # auto|oj|direct
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --oj)
+      backend="oj"
+      shift
+      ;;
+    --direct)
+      backend="direct"
+      shift
+      ;;
+    --auto)
+      backend="auto"
+      shift
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
 src="${1:-main.cpp}"
 url="${2:-}"
 
@@ -14,9 +36,90 @@ if [[ -z "$url" && -f .task-url ]]; then
 fi
 
 if [[ -z "$url" ]]; then
-  echo "usage: ac-submit [src] [url]" >&2
+  echo "usage: ac-submit [--auto|--oj|--direct] [src] [url]" >&2
   echo "or place .task-url in current directory" >&2
   exit 1
 fi
 
-oj submit --yes "$url" "$src"
+# Inject runtime workaround for AtCoder's memory unit notation change
+# (MiB/KiB) that breaks older online-judge-api-client releases.
+script_path="${BASH_SOURCE[0]}"
+if [[ "$script_path" != */* ]]; then
+  script_path="$(command -v "$script_path" || true)"
+fi
+
+find_patch_dir() {
+  local root=""
+  local dir=""
+
+  root="${ATCODER_ROOT:-}"
+  if [[ -n "$root" && -f "$root/patches/oj/sitecustomize.py" ]]; then
+    echo "$root/patches/oj"
+    return 0
+  fi
+
+  if [[ -n "$script_path" ]]; then
+    root="$(cd "$(dirname "$script_path")/.." && pwd)"
+    if [[ -f "$root/patches/oj/sitecustomize.py" ]]; then
+      echo "$root/patches/oj"
+      return 0
+    fi
+  fi
+
+  dir="$PWD"
+  while [[ "$dir" != "/" ]]; do
+    if [[ -f "$dir/patches/oj/sitecustomize.py" ]]; then
+      echo "$dir/patches/oj"
+      return 0
+    fi
+    dir="$(dirname "$dir")"
+  done
+
+  return 1
+}
+
+if patch_dir="$(find_patch_dir)"; then
+  export PYTHONPATH="${patch_dir}${PYTHONPATH:+:$PYTHONPATH}"
+fi
+
+submit_with_oj() {
+  oj submit --yes "$url" "$src"
+}
+
+submit_with_direct() {
+  local direct_cmd=""
+
+  if [[ -n "$script_path" ]]; then
+    direct_cmd="$(cd "$(dirname "$script_path")" && pwd)/ac-submit-direct"
+  fi
+  if [[ -z "$direct_cmd" || ! -x "$direct_cmd" ]]; then
+    direct_cmd="$(command -v ac-submit-direct || true)"
+  fi
+  if [[ -z "$direct_cmd" || ! -x "$direct_cmd" ]]; then
+    echo "error: ac-submit-direct not found or not executable" >&2
+    return 1
+  fi
+
+  "$direct_cmd" "$src" "$url"
+}
+
+case "$backend" in
+  oj)
+    submit_with_oj
+    ;;
+  direct)
+    submit_with_direct
+    ;;
+  auto)
+    if submit_with_oj; then
+      :
+    else
+      echo "[ac-submit] oj submit failed; trying direct HTTP submit..." >&2
+      submit_with_direct
+    fi
+    ;;
+  *)
+    echo "error: unknown backend: $backend (expected: auto|oj|direct)" >&2
+    exit 1
+    ;;
+esac
