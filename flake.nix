@@ -21,6 +21,7 @@
               gdb
               clang-tools
               gnumake
+              ac-library
               python3
               python3Packages.online-judge-tools
               jq
@@ -34,7 +35,11 @@
                 export ATCODER_ROOT="$git_root"
               fi
               export CXX=${pkgs.gcc}/bin/g++
-              export CXXFLAGS="-std=gnu++20 -O2 -Wall -Wextra -Wshadow -Wconversion -Wno-sign-conversion"
+              export ATCODER_ACL_INCLUDE="${pkgs.ac-library}/include"
+              export CPLUS_INCLUDE_PATH="$ATCODER_ACL_INCLUDE''${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
+              export CPATH="$ATCODER_ACL_INCLUDE''${CPATH:+:$CPATH}"
+              export CXXFLAGS="-std=gnu++20 -O2 -I$ATCODER_ACL_INCLUDE -Wall -Wextra -Wshadow -Wconversion -Wno-sign-conversion"
+              export CXXFLAGS_DEBUG="-std=gnu++20 -g -O0 -I$ATCODER_ACL_INCLUDE -Wall -Wextra -Wshadow -Wconversion -Wno-sign-conversion"
               export CONTEST_MODE=1
               export NVIM_APPNAME=nvim-atcoder
               export ATCODER_TEMPLATE="$ATCODER_ROOT/template/main.cpp"
@@ -45,151 +50,6 @@
 
               mkdir -p "$HOME/.config/nvim-atcoder"
               cat > "$HOME/.config/nvim-atcoder/init.lua" <<'LUA'
-local noop = function() end
-
-local function is_ai_name(name)
-  local lower = string.lower(name or "")
-  return lower:find("copilot", 1, true)
-    or lower:find("codeium", 1, true)
-    or lower:find("tabnine", 1, true)
-    or lower:find("supermaven", 1, true)
-    or lower:find("avante", 1, true)
-end
-
-local function disable_copilot_buffer(bufnr)
-  pcall(function()
-    vim.b[bufnr].copilot_enabled = false
-    vim.b[bufnr].copilot_suggestion_hidden = true
-  end)
-end
-
-local function filter_ai_sources(sources)
-  local filtered = {}
-  for _, src in ipairs(sources or {}) do
-    local name = ""
-    if type(src) == "table" then
-      name = src.name or ""
-    end
-    if not is_ai_name(name) then
-      table.insert(filtered, src)
-    end
-  end
-  return filtered
-end
-
-local cmp_capabilities = nil
-do
-  local ok_cmp_lsp, cmp_lsp = pcall(require, "cmp_nvim_lsp")
-  if ok_cmp_lsp and type(cmp_lsp.default_capabilities) == "function" then
-    local ok_caps, caps = pcall(cmp_lsp.default_capabilities)
-    if ok_caps and type(caps) == "table" then
-      cmp_capabilities = caps
-    end
-  end
-end
-
-local function stop_ai_clients(bufnr)
-  if not (vim.lsp and vim.lsp.get_clients) then
-    return
-  end
-  local opts = {}
-  if bufnr then
-    opts.bufnr = bufnr
-  end
-  for _, client in ipairs(vim.lsp.get_clients(opts)) do
-    if is_ai_name(client.name) then
-      pcall(function()
-        client:stop(true)
-      end)
-    end
-  end
-end
-
-local function disable_inline_completion(bufnr)
-  pcall(function()
-    local inline = vim.lsp and vim.lsp.inline_completion
-    if inline and inline.enable then
-      inline.enable(false, { bufnr = bufnr })
-    end
-  end)
-  pcall(vim.keymap.del, "i", "<Tab>", { buffer = bufnr })
-end
-
-vim.g.copilot_enabled = false
-vim.g.copilot_no_tab_map = true
-vim.g.copilot_assume_mapped = true
-vim.g.copilot_filetypes = { ["*"] = false }
-vim.g.codeium_disable_bindings = 1
-
--- Stub AI-related modules in AtCoder mode.
-package.preload["copilot"] = function()
-  return {
-    setup = noop,
-    teardown = noop,
-    enable = noop,
-    disable = noop,
-  }
-end
-package.preload["copilot_cmp"] = function()
-  return { setup = noop }
-end
-package.preload["copilot.client"] = function()
-  return { setup = noop, teardown = noop }
-end
-package.preload["copilot.suggestion"] = function()
-  return {
-    setup = noop,
-    teardown = noop,
-    dismiss = noop,
-    hide = noop,
-    next = noop,
-    prev = noop,
-    accept = noop,
-    is_visible = function() return false end,
-  }
-end
-package.preload["copilot.panel"] = function()
-  return {
-    setup = noop,
-    teardown = noop,
-    open = noop,
-    close = noop,
-    jump_next = noop,
-    jump_prev = noop,
-    accept = noop,
-  }
-end
-package.preload["CopilotChat"] = function()
-  return {
-    setup = noop,
-    toggle = noop,
-    chat = { visible = function() return false end, winnr = -1 },
-  }
-end
-package.preload["CopilotChat.config"] = function()
-  return {
-    mappings = {
-      accept_diff = { callback = noop },
-    },
-  }
-end
-package.preload["CopilotChat.config.prompts"] = function()
-  return {
-    Commit = { prompt = "" },
-  }
-end
-package.preload["CopilotChat.select"] = function()
-  return {
-    gitdiff = noop,
-  }
-end
-package.preload["CopilotChat.completion"] = function()
-  return {
-    enable = noop,
-    omnifunc = function() return -2 end,
-  }
-end
-
 local home = os.getenv("HOME") or ""
 local base_init = home .. "/.config/nvim/init.lua"
 local ok, err = pcall(dofile, base_init)
@@ -197,109 +57,121 @@ if not ok then
   vim.api.nvim_err_writeln("nvim-atcoder: failed to load base init.lua: " .. tostring(err))
 end
 
--- Force-disable copilot even if base config enables it.
-pcall(vim.cmd, "silent! Copilot disable")
-for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
-  disable_copilot_buffer(bufnr)
-end
-vim.api.nvim_create_autocmd({ "BufEnter", "InsertEnter", "FileType" }, {
-  callback = function(args)
-    disable_copilot_buffer(args.buf)
-    pcall(vim.cmd, "silent! Copilot disable")
-  end,
-})
-
--- Enable C/C++ LSP in contest shell.
-local clangd_enabled_via_core = false
-pcall(function()
-  if vim.lsp and vim.lsp.enable and vim.lsp.config and vim.lsp.config["clangd"] then
-    vim.lsp.enable({ "clangd" })
-    clangd_enabled_via_core = true
-  end
-end)
-
-local function ensure_clangd(bufnr)
-  if not (vim.lsp and vim.lsp.start and vim.lsp.get_clients) then
-    return
-  end
-  if not vim.api.nvim_buf_is_valid(bufnr) then
-    return
-  end
-  if vim.bo[bufnr].buftype ~= "" then
-    return
-  end
-  local ft = vim.bo[bufnr].filetype
-  if ft ~= "c" and ft ~= "cpp" and ft ~= "objc" and ft ~= "objcpp" then
-    return
-  end
-  for _, client in ipairs(vim.lsp.get_clients({ bufnr = bufnr })) do
-    if client.name == "clangd" then
-      return
-    end
-  end
-  local exepath = vim.fn.exepath("clangd")
-  if exepath == "" then
-    return
-  end
-  local filename = vim.api.nvim_buf_get_name(bufnr)
-  local root = nil
-  if vim.fs and vim.fs.root then
-    root = vim.fs.root(filename, { ".git", "compile_commands.json", "compile_flags.txt" })
-  end
-  if not root or root == "" then
-    root = vim.fn.getcwd()
-  end
-  pcall(vim.lsp.start, {
-    name = "clangd",
-    cmd = { exepath },
-    root_dir = root,
-    capabilities = cmp_capabilities,
-  })
-end
-if not clangd_enabled_via_core then
-  vim.api.nvim_create_autocmd({ "FileType", "BufEnter" }, {
-    callback = function(args)
-      ensure_clangd(args.buf)
-    end,
-  })
-end
-
-vim.api.nvim_create_autocmd("LspAttach", {
-  callback = function(args)
-    disable_copilot_buffer(args.buf)
-    stop_ai_clients(args.buf)
-    disable_inline_completion(args.buf)
-  end,
-})
-vim.schedule(function()
-  pcall(vim.cmd, "silent! Copilot disable")
-  stop_ai_clients()
-  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
-    ensure_clangd(bufnr)
-    disable_inline_completion(bufnr)
-  end
-end)
-
--- Remove copilot source from cmp if present.
-vim.schedule(function()
-  local ok_cmp, cmp = pcall(require, "cmp")
-  if not ok_cmp then
-    return
-  end
-  local cfg = cmp.get_config()
-  cfg.sources = filter_ai_sources(cfg.sources)
-  cmp.setup(cfg)
-end)
-
 -- Show diagnostics while typing in contest mode.
 pcall(vim.diagnostic.config, {
   update_in_insert = true,
 })
+
+-- Simplified DAP config for contest builds.
+pcall(function()
+  local dap = require("dap")
+
+  local function first_readable(paths)
+    for _, path in ipairs(paths) do
+      if path ~= "" and vim.fn.filereadable(path) == 1 then
+        return path
+      end
+    end
+    return nil
+  end
+
+  local function task_dir()
+    local file_dir = vim.fn.expand("%:p:h")
+    if file_dir ~= "" then
+      return file_dir
+    end
+    return vim.fn.getcwd()
+  end
+
+  local function current_build_output()
+    local dir = task_dir()
+    local stem = vim.fn.expand("%:t:r")
+    local candidates = {}
+    if stem ~= "" then
+      table.insert(candidates, dir .. "/" .. stem .. ".out")
+    end
+    table.insert(candidates, dir .. "/main.out")
+    table.insert(candidates, dir .. "/a.out")
+    return first_readable(candidates)
+  end
+
+  local function collect_stdin_candidates(cwd)
+    local candidates = {}
+    local seen = {}
+    for _, pattern in ipairs({ "test/**/*.in", "test/*.in", "*.in", "input.txt", "stdin.txt" }) do
+      for _, path in ipairs(vim.fn.globpath(cwd, pattern, false, true)) do
+        if vim.fn.filereadable(path) == 1 and not seen[path] then
+          seen[path] = true
+          table.insert(candidates, path)
+        end
+      end
+    end
+    table.sort(candidates)
+    return candidates
+  end
+
+  local function pick_stdin_file()
+    local dir = task_dir()
+    local candidates = collect_stdin_candidates(dir)
+    if #candidates == 0 then
+      local typed = vim.fn.input("stdin file (empty: none): ", dir .. "/", "file")
+      return typed ~= "" and typed or nil
+    end
+
+    local lines = { "stdin file:" }
+    lines[#lines + 1] = "1. (none)"
+    for i, path in ipairs(candidates) do
+      lines[#lines + 1] = (i + 1) .. ". " .. vim.fn.fnamemodify(path, ":~:.")
+    end
+    local manual_index = #candidates + 2
+    lines[#lines + 1] = manual_index .. ". Enter path manually"
+
+    local selected = vim.fn.inputlist(lines)
+    if selected == 1 then
+      return nil
+    end
+    if selected == manual_index then
+      local typed = vim.fn.input("stdin file (empty: none): ", dir .. "/", "file")
+      return typed ~= "" and typed or nil
+    end
+    return candidates[selected - 1]
+  end
+
+  for _, lang in ipairs({ "c", "cpp" }) do
+    dap.configurations[lang] = {
+      {
+        name = "Launch current build output",
+        type = "codelldb",
+        request = "launch",
+        program = function()
+          local program = current_build_output()
+          if program then
+            return program
+          end
+          local typed = vim.fn.input("Executable: ", task_dir() .. "/", "file")
+          if typed == "" then
+            return dap.ABORT
+          end
+          return typed
+        end,
+        stdio = function()
+          local stdin_file = pick_stdin_file()
+          if stdin_file == nil or stdin_file == "" then
+            return nil
+          end
+          return { stdin_file, nil, nil }
+        end,
+        cwd = task_dir,
+        stopOnEntry = false,
+      },
+    }
+  end
+end)
 LUA
 
               echo "[atcoder] contest shell loaded"
-              echo "[atcoder] commands: ac-new, ac-new-all, ac-test, ac-submit"
-              echo "[atcoder] nvim: base config + AI integrations disabled"
+              echo "[atcoder] commands: ac-new, ac-new-all, ac-test, ac-build, ac-submit"
+              echo "[atcoder] nvim: base config (AI plugins not installed in dotfiles)"
 
               # Prefer zsh for interactive `nix develop` sessions.
               # Keep non-interactive `nix develop -c ...` behavior unchanged.
