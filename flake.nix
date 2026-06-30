@@ -51,90 +51,35 @@
               mkdir -p "$HOME/.config/nvim-atcoder"
               cat > "$HOME/.config/nvim-atcoder/init.lua" <<'LUA'
 local home = os.getenv("HOME") or ""
-local base_init = home .. "/.config/nvim/init.lua"
-local ok, err = pcall(dofile, base_init)
+local ok, err = pcall(dofile, home .. "/.config/nvim/init.lua")
 if not ok then
   vim.api.nvim_err_writeln("nvim-atcoder: failed to load base init.lua: " .. tostring(err))
 end
 
--- Show diagnostics while typing in contest mode.
-pcall(vim.diagnostic.config, {
-  update_in_insert = true,
-})
+-- Contest-mode diagnostics + DAP override.
+pcall(vim.diagnostic.config, { update_in_insert = true })
 
--- Simplified DAP config for contest builds.
 pcall(function()
   local dap = require("dap")
+  local helpers = require("dap.codelldb_helpers")
 
-  local function first_readable(paths)
-    for _, path in ipairs(paths) do
-      if path ~= "" and vim.fn.filereadable(path) == 1 then
+  local function task_dir()
+    local file_dir = vim.fn.expand("%:p:h")
+    return file_dir ~= "" and file_dir or vim.fn.getcwd()
+  end
+
+  local function first_build_output(dir)
+    local stem = vim.fn.expand("%:t:r")
+    for _, path in ipairs({
+      dir .. "/" .. stem .. ".out",
+      dir .. "/main.out",
+      dir .. "/a.out",
+    }) do
+      if vim.fn.filereadable(path) == 1 then
         return path
       end
     end
     return nil
-  end
-
-  local function task_dir()
-    local file_dir = vim.fn.expand("%:p:h")
-    if file_dir ~= "" then
-      return file_dir
-    end
-    return vim.fn.getcwd()
-  end
-
-  local function current_build_output()
-    local dir = task_dir()
-    local stem = vim.fn.expand("%:t:r")
-    local candidates = {}
-    if stem ~= "" then
-      table.insert(candidates, dir .. "/" .. stem .. ".out")
-    end
-    table.insert(candidates, dir .. "/main.out")
-    table.insert(candidates, dir .. "/a.out")
-    return first_readable(candidates)
-  end
-
-  local function collect_stdin_candidates(cwd)
-    local candidates = {}
-    local seen = {}
-    for _, pattern in ipairs({ "test/**/*.in", "test/*.in", "*.in", "input.txt", "stdin.txt" }) do
-      for _, path in ipairs(vim.fn.globpath(cwd, pattern, false, true)) do
-        if vim.fn.filereadable(path) == 1 and not seen[path] then
-          seen[path] = true
-          table.insert(candidates, path)
-        end
-      end
-    end
-    table.sort(candidates)
-    return candidates
-  end
-
-  local function pick_stdin_file()
-    local dir = task_dir()
-    local candidates = collect_stdin_candidates(dir)
-    if #candidates == 0 then
-      local typed = vim.fn.input("stdin file (empty: none): ", dir .. "/", "file")
-      return typed ~= "" and typed or nil
-    end
-
-    local lines = { "stdin file:" }
-    lines[#lines + 1] = "1. (none)"
-    for i, path in ipairs(candidates) do
-      lines[#lines + 1] = (i + 1) .. ". " .. vim.fn.fnamemodify(path, ":~:.")
-    end
-    local manual_index = #candidates + 2
-    lines[#lines + 1] = manual_index .. ". Enter path manually"
-
-    local selected = vim.fn.inputlist(lines)
-    if selected == 1 then
-      return nil
-    end
-    if selected == manual_index then
-      local typed = vim.fn.input("stdin file (empty: none): ", dir .. "/", "file")
-      return typed ~= "" and typed or nil
-    end
-    return candidates[selected - 1]
   end
 
   for _, lang in ipairs({ "c", "cpp" }) do
@@ -144,25 +89,27 @@ pcall(function()
         type = "codelldb",
         request = "launch",
         program = function()
-          local program = current_build_output()
-          if program then
-            return program
-          end
-          local typed = vim.fn.input("Executable: ", task_dir() .. "/", "file")
-          if typed == "" then
-            return dap.ABORT
-          end
+          local dir = task_dir()
+          local program = first_build_output(dir)
+          if program then return program end
+          local typed = vim.fn.input("Executable: ", dir .. "/", "file")
+          if typed == "" then return dap.ABORT end
           return typed
         end,
         stdio = function()
-          local stdin_file = pick_stdin_file()
-          if stdin_file == nil or stdin_file == "" then
-            return nil
-          end
+          local dir = task_dir()
+          local stdin_file = helpers.pick_path_from_candidates(
+            "stdin file (empty: none): ",
+            helpers.collect_stdin_candidates(dir),
+            dir .. "/",
+            true
+          )
+          if stdin_file == nil or stdin_file == "" then return nil end
           return { stdin_file, nil, nil }
         end,
         cwd = task_dir,
         stopOnEntry = false,
+        _adapterSettings = helpers.adapter_settings,
       },
     }
   end
