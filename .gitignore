@@ -1,1 +1,20 @@
+# contest work trees
 work/
+
+# secrets / cookies (Netscape cookies.txt holds AtCoder session)
+cookies.txt
+cookie.txt
+*.cookie.jar
+
+# build / editor artifacts
+*.out
+.cmpcheck*.cpp
+cmpcheck*.cpp
+nvim.log
+
+# python bytecode (patches/oj)
+__pycache__/
+*.pyc
+
+# agent/tooling scratch
+.codex

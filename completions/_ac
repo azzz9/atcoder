@@ -1,0 +1,55 @@
+#compdef ac
+# zsh completion for the `ac` dispatcher.
+
+_ac() {
+  local -a commands
+  commands=(
+    'test:Build and run oj tests (gdb backtrace on runtime error)'
+    'build:Build only (no tests)'
+    'new:Create task dir(s); all tasks if <task> omitted'
+    'submit:Submit (auto: oj -> direct fallback)'
+    'submit-direct:Submit via direct HTTP (cookie.jar)'
+    'cookie-import:Import cookies for oj'
+  )
+
+  if (( CURRENT == 2 )); then
+    _describe 'command' commands
+    return
+  fi
+
+  local sub="${words[2]}"
+  case "$sub" in
+    test|build)
+      _arguments \
+        '--debug[Build with debug flags (-g -O0)]' \
+        '--release[Build with release flags (-O2)]' \
+        '--build-only[Only build, do not run oj tests]' \
+        '--full[Print full gdb backtrace (bt full) on runtime error]' \
+        '(-h --help)'{-h,--help}'[Show help]' \
+        '*:source file:_files'
+      ;;
+    new)
+      _arguments \
+        ':contest:' \
+        '::task (omit to fetch all tasks):'
+      ;;
+    submit|submit-direct)
+      _arguments \
+        '--oj[Use oj backend]' \
+        '--direct[Use direct HTTP backend]' \
+        '--auto[Auto: oj then direct fallback]' \
+        '::source file:_files' \
+        '::task url:'
+      ;;
+    cookie-import)
+      _arguments \
+        '::cookies file:_files' \
+        '::cookie jar:_files'
+      ;;
+    *)
+      _message "no more arguments for '$sub'"
+      ;;
+  esac
+}
+
+_ac "$@"

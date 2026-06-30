@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+libexec="$script_dir/../libexec"
+
+print_usage() {
+  cat >&2 <<'USAGE'
+usage: ac <command> [options...]
+
+commands:
+  test            Build and run oj tests (gdb backtrace on runtime error)
+  build           Build only (no tests)
+  new             Create task dir(s); all tasks if <task> omitted
+  submit          Submit (auto: oj -> direct fallback)
+  submit-direct   Submit via direct HTTP (cookie.jar)
+  cookie-import   Import cookies for oj
+
+options:
+  -h, --help      Show this help.
+USAGE
+}
+
+cmd="${1:-}"
+[[ $# -gt 0 ]] && shift
+
+case "$cmd" in
+  test)
+    exec "$libexec/ac-test" "$@"
+    ;;
+  build)
+    exec "$libexec/ac-test" --build-only "$@"
+    ;;
+  new)
+    exec "$libexec/ac-new" "$@"
+    ;;
+  submit)
+    exec "$libexec/ac-submit" "$@"
+    ;;
+  submit-direct)
+    exec "$libexec/ac-submit-direct" "$@"
+    ;;
+  cookie-import)
+    exec "$libexec/ac-cookie-import" "$@"
+    ;;
+  -h|--help)
+    print_usage
+    exit 0
+    ;;
+  "")
+    print_usage
+    exit 1
+    ;;
+  *)
+    echo "error: unknown command: $cmd" >&2
+    echo "run 'ac --help' for available commands." >&2
+    exit 1
+    ;;
+esac

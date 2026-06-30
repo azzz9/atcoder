@@ -1,59 +1,91 @@
 # AtCoder C++ (Nix Flake)
 
-This directory provides a contest-only C++ environment.
+A contest-only C++ environment. All tooling is exposed through a single `ac`
+dispatcher so the workflow is the same whether you use `nix develop` or direnv.
 
 ## Setup
 
 1. `cd /path/to/atcoder`
-2. `direnv allow` (first time only)
-3. `nix develop` (if direnv is not active)
-4. `oj login https://atcoder.jp/ --check`
+2. `direnv allow` (first time only), or run `nix develop` directly
+3. `oj login https://atcoder.jp/ --check`
 
-`ac-*` commands are added by `devShell`'s `shellHook`, so use `nix develop` (or direnv), not plain `nix shell`.
+The `ac` command and zsh/bash completion are set up by the `devShell`
+`shellHook`, so use `nix develop` (or direnv), not plain `nix shell`.
 
 ## Commands
 
-- `ac-new <contest> <task> [dir]` (create one task)
-- `ac-new-all <contest> [auto|count|tasks] [base_dir]`
-- `ac-test [src]` (run for current task only)
-- `ac-submit [--auto|--oj|--direct] [src] [url]` (submit current task only)
-- `ac-cookie-import [cookies.txt] [cookie.jar]` (Netscape cookies.txt -> oj cookie.jar)
+Everything goes through `ac <command>`. Run `ac --help` for the list.
 
-## ac-new-all
+- `ac new <contest> [task]` — create task directories. Omit `<task>` to fetch
+  **all** tasks for the contest automatically (non-existent URLs skipped);
+  specify a task label to create a single task.
+- `ac build [src]` — build only (no tests). Shortcut for `ac test --build-only`.
+- `ac test [src]` — build and run `oj` tests. Debug build (`-g -O0`) is the
+  default; on a runtime error it re-runs the failing case under `gdb` and
+  prints a backtrace (`bt`). Use `--full` for variable dumps (`bt full`).
+- `ac submit [src] [url]` — submit the current task. Default backend is
+  `--auto` (`oj` first, then direct HTTP fallback).
+- `ac submit-direct [src] [url]` — submit via direct HTTP using `cookie.jar`.
+- `ac cookie-import [cookies.txt] [cookie.jar]` — convert Netscape
+  `cookies.txt` into an `oj`-compatible `cookie.jar`.
 
-Default (`auto`) tries to detect existing task labels from AtCoder and creates only those.
+### Common flags (build / test)
 
-```bash
-ac-new-all abc452
-```
-
-If auto detection fails or you want manual control, specify count or labels:
-
-```bash
-ac-new-all abc452 6            # a..f
-ac-new-all abc452 a,b,c,d,e,f  # explicit list
-```
+- `--debug` build with `-g -O0` (default)
+- `--release` build with `-O2`
+- `--build-only` build only, skip `oj` tests
+- `--full` print full gdb backtrace (`bt full`) on runtime error
 
 ## Recommended contest flow
 
 ```bash
-# 1) create all tasks at start
-ac-new-all abc452
+# 1) create all tasks at the start
+ac new abc452
 
-# 2) solve each task separately
+# 2) solve each task
 cd work/abc452/a
-ac-test
-ac-submit
+ac test          # build + run samples; shows a gdb backtrace on runtime error
+ac submit
 
 cd ../b
-ac-test
-ac-submit
+ac test
+ac submit
 ```
 
-Note:
+There is intentionally no `ac test-all` / `ac submit-all`: testing and
+submitting are done per task.
 
-- There is intentionally no `ac-test-all` / `ac-submit-all`.
-- Test and submit are expected to be done per task.
+## Shell completion
+
+`nix develop` launches zsh (wrapping your `~/.zshrc`) and prepends the
+project's `completions/` directory to `fpath` before `compinit` runs, so
+`ac <Tab>` completes subcommands and `ac test --<Tab>` completes options.
+
+A bash completion script is also provided at `completions/ac.bash` for users
+who source it manually.
+
+## AtCoder Library
+
+The dev shell includes AtCoder Library (`ac-library`):
+
+```cpp
+#include <atcoder/all>
+using namespace atcoder;
+```
+
+`ac test`, `ac build`, and clangd inherit the include path from
+`nix develop` / direnv.
+
+## Project layout
+
+- `bin/ac` — the dispatcher entry point (on `$PATH`)
+- `libexec/ac-*` — per-command implementations (not on `$PATH`)
+- `completions/` — `_ac` (zsh) and `ac.bash` completion
+- `config/nvim-atcoder/init.lua` — contest-mode Neovim config (installed to
+  `~/.config/nvim-atcoder/` by the dev shell)
+- `template/main.cpp` — source template copied into new task dirs
+- `patches/oj/sitecustomize.py` — runtime workaround for `oj` submission
+- `flake.nix` — dev shell definition
 
 ## Contest operation
 
@@ -63,10 +95,16 @@ Note:
 
 ## Notes
 
-- `ac-submit` includes a runtime workaround for AtCoder's memory unit notation (`MiB`/`KiB`) so submission works with the currently packaged `online-judge-api-client`.
-- `ac-submit` default backend is `--auto`: it tries `oj submit` first, and if that fails it falls back to direct HTTP submission (`ac-submit-direct`).
-- `ac-submit-direct` default language selection is fixed to C++ (GCC family).
-- `ac-submit-direct` can be run without arguments in a task directory (`main.cpp` + `.task-url`), and `--dry-run` checks parsing/language selection without posting.
-- If AtCoder injects Cloudflare Turnstile on submit, pure terminal HTTP submit is blocked because a browser-issued Turnstile token (`cf-turnstile-response`) is required.
-- To force one backend, use `ac-submit --oj` or `ac-submit --direct` (or `AC_SUBMIT_BACKEND=oj|direct|auto`).
-- If direct submit fails due authentication/challenge, export browser cookies (`cookies.txt`) and run `ac-cookie-import` to refresh `cookie.jar`.
+- `ac submit` includes a runtime workaround for AtCoder's memory unit notation
+  (`MiB`/`KiB`) so submission works with the currently packaged
+  `online-judge-api-client`.
+- `ac submit-direct` default language selection is fixed to C++ (GCC family).
+- `ac submit-direct` can be run without arguments in a task directory
+  (`main.cpp` + `.task-url`); `--dry-run` checks parsing/language selection
+  without posting.
+- If AtCoder injects Cloudflare Turnstile on submit, pure terminal HTTP submit
+  is blocked because a browser-issued Turnstile token is required.
+- To force one backend, use `ac submit --oj` or `ac submit --direct` (or
+  `AC_SUBMIT_BACKEND=oj|direct|auto`).
+- If direct submit fails due to authentication/challenge, export browser
+  cookies (`cookies.txt`) and run `ac cookie-import` to refresh `cookie.jar`.

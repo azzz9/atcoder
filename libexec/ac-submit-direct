@@ -23,7 +23,7 @@ USER_AGENT = (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="ac-submit-direct",
+        prog="ac submit-direct",
         description="Submit to AtCoder directly with cookie.jar (without oj submit, C++ fixed).",
     )
     parser.add_argument("src", nargs="?", default="main.cpp", help="source file path")

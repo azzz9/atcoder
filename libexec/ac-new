@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'USAGE'
+usage: ac new <contest> [task]
+
+Create task directories for the contest. With <task>, create only that task.
+Without <task>, fetch all tasks automatically (non-existent URLs skipped).
+
+examples:
+  ac new abc410        # fetch all tasks for abc410
+  ac new abc410 a      # create only task a
+USAGE
+}
+
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+  usage
+  exit 1
+fi
+
+contest="${1,,}"
+task="${2:-}"
+
+template_src=""
+if [[ -n "${ATCODER_TEMPLATE:-}" && -f "${ATCODER_TEMPLATE}" ]]; then
+  template_src="$ATCODER_TEMPLATE"
+fi
+
+create_task() {
+  local c="$1" t="$2" target="$3"
+  local url="https://atcoder.jp/contests/${c}/tasks/${c}_${t}"
+
+  mkdir -p "$target"
+  local src="$target/main.cpp"
+  if [[ -e "$src" ]]; then
+    echo "error: $src already exists" >&2
+    return 1
+  fi
+
+  if [[ -n "$template_src" ]]; then
+    cp "$template_src" "$src"
+  else
+    cat > "$src" <<'CPP'
+#include <bits/stdc++.h>
+using namespace std;
+
+int main() {
+  ios::sync_with_stdio(false);
+  cin.tie(nullptr);
+
+  return 0;
+}
+CPP
+  fi
+  chmod u+rw,go+r "$src"
+  printf '%s\n' "$url" > "$target/.task-url"
+
+  echo "created: $src"
+  echo "task url: $url"
+
+  if command -v oj >/dev/null 2>&1; then
+    ( cd "$target" && oj d "$url" && echo "downloaded samples into $target/test" ) \
+      || echo "warning: failed to download samples (check login state)" >&2
+  else
+    echo "warning: oj command not found" >&2
+  fi
+}
+
+detect_tasks() {
+  local cid="$1"
+  local url="https://atcoder.jp/contests/${cid}/tasks"
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "error: curl is required for auto task detection" >&2
+    return 1
+  fi
+  local extracted
+  extracted="$(curl -fsSL "${url}" \
+    | grep -oE "/contests/${cid}/tasks/${cid}_[a-z]+" \
+    | sed -E "s#.*/${cid}_([a-z]+)#\\1#" \
+    | grep -E '^[a-z]$' \
+    | sort -u || true)"
+  if [[ -z "$extracted" ]]; then
+    echo "error: failed to detect tasks for ${cid}" >&2
+    return 1
+  fi
+  echo "$extracted"
+}
+
+task_url_exists() {
+  local url="$1"
+  command -v curl >/dev/null 2>&1 || return 0
+  curl -fsS -o /dev/null "$url"
+}
+
+if [[ -n "$task" ]]; then
+  create_task "$contest" "$task" "work/${contest}/${task}"
+else
+  mapfile -t tasks < <(detect_tasks "$contest")
+  if [[ ${#tasks[@]} -eq 0 ]]; then
+    echo "error: no tasks resolved" >&2
+    exit 1
+  fi
+  base="work/${contest}"
+  mkdir -p "$base"
+  ok=0
+  ng=0
+  for t in "${tasks[@]}"; do
+    url="https://atcoder.jp/contests/${contest}/tasks/${contest}_${t}"
+    echo "==> ${contest} ${t}"
+    if ! task_url_exists "$url"; then
+      echo "warning: task URL not found, skipped: ${url}" >&2
+      ng=$((ng + 1))
+      continue
+    fi
+    if create_task "$contest" "$t" "${base}/${t}"; then
+      ok=$((ok + 1))
+    else
+      ng=$((ng + 1))
+    fi
+  done
+  echo
+  echo "done: success=${ok}, failed=${ng}"
+  if [[ $ng -gt 0 ]]; then
+    exit 1
+  fi
+fi

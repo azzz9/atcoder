@@ -7,7 +7,7 @@ dst="${2:-$HOME/.local/share/online-judge-tools/cookie.jar}"
 
 if [[ ! -f "$src" ]]; then
   echo "error: source cookies file not found: $src" >&2
-  echo "usage: ac-cookie-import [cookies.txt] [cookie.jar]" >&2
+  echo "usage: ac cookie-import [cookies.txt] [cookie.jar]" >&2
   exit 1
 fi
 

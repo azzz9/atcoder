@@ -49,83 +49,46 @@
               unset OPENAI_API_KEY ANTHROPIC_API_KEY GOOGLE_API_KEY
 
               mkdir -p "$HOME/.config/nvim-atcoder"
-              cat > "$HOME/.config/nvim-atcoder/init.lua" <<'LUA'
-local home = os.getenv("HOME") or ""
-local ok, err = pcall(dofile, home .. "/.config/nvim/init.lua")
-if not ok then
-  vim.api.nvim_err_writeln("nvim-atcoder: failed to load base init.lua: " .. tostring(err))
-end
-
--- Contest-mode diagnostics + DAP override.
-pcall(vim.diagnostic.config, { update_in_insert = true })
-
-pcall(function()
-  local dap = require("dap")
-  local helpers = require("dap.codelldb_helpers")
-
-  local function task_dir()
-    local file_dir = vim.fn.expand("%:p:h")
-    return file_dir ~= "" and file_dir or vim.fn.getcwd()
-  end
-
-  local function first_build_output(dir)
-    local stem = vim.fn.expand("%:t:r")
-    for _, path in ipairs({
-      dir .. "/" .. stem .. ".out",
-      dir .. "/main.out",
-      dir .. "/a.out",
-    }) do
-      if vim.fn.filereadable(path) == 1 then
-        return path
-      end
-    end
-    return nil
-  end
-
-  for _, lang in ipairs({ "c", "cpp" }) do
-    dap.configurations[lang] = {
-      {
-        name = "Launch current build output",
-        type = "codelldb",
-        request = "launch",
-        program = function()
-          local dir = task_dir()
-          local program = first_build_output(dir)
-          if program then return program end
-          local typed = vim.fn.input("Executable: ", dir .. "/", "file")
-          if typed == "" then return dap.ABORT end
-          return typed
-        end,
-        stdio = function()
-          local dir = task_dir()
-          local stdin_file = helpers.pick_path_from_candidates(
-            "stdin file (empty: none): ",
-            helpers.collect_stdin_candidates(dir),
-            dir .. "/",
-            true
-          )
-          if stdin_file == nil or stdin_file == "" then return nil end
-          return { stdin_file, nil, nil }
-        end,
-        cwd = task_dir,
-        stopOnEntry = false,
-        _adapterSettings = helpers.adapter_settings,
-      },
-    }
-  end
-end)
-LUA
+              # Install the contest-mode nvim config from the repo. It is kept
+              # as a real .lua file (config/nvim-atcoder/init.lua) instead of an
+              # embedded heredoc so it can be edited/linted normally.
+              if [[ -f "$ATCODER_ROOT/config/nvim-atcoder/init.lua" ]]; then
+                cp "$ATCODER_ROOT/config/nvim-atcoder/init.lua" \
+                   "$HOME/.config/nvim-atcoder/init.lua"
+              fi
 
               echo "[atcoder] contest shell loaded"
-              echo "[atcoder] commands: ac-new, ac-new-all, ac-test, ac-build, ac-submit"
+              echo "[atcoder] commands: ac test, ac build, ac new, ac submit"
               echo "[atcoder] nvim: base config (AI plugins not installed in dotfiles)"
 
               # Prefer zsh for interactive `nix develop` sessions.
               # Keep non-interactive `nix develop -c ...` behavior unchanged.
               # Run this at the end so PATH/setup above is preserved.
-              if [[ -t 0 && -t 1 && -z "''${ZSH_VERSION:-}" && -z "''${ATCODER_NIX_ZSH_BOOTSTRAPPED:-}" ]]; then
-                export ATCODER_NIX_ZSH_BOOTSTRAPPED=1
+              # Note: we deliberately do NOT gate on a persistent bootstrap env
+              # var: if a prior `nix develop` set it and exec zsh failed (or the
+              # user is nested inside that broken shell), the var would leak and
+              # block every subsequent launch. Re-exec is already prevented by the
+              # ZSH_VERSION check below (zsh does not re-run the nix shellHook).
+              if [[ -t 0 && -t 1 && -z "''${ZSH_VERSION:-}" ]]; then
                 export SHELL=${pkgs.zsh}/bin/zsh
+                # zsh completion: launch a login zsh whose ZDOTDIR is a tiny
+                # wrapper that (1) prepends our completions dir to fpath before
+                # the user's .zshrc (and its compinit) runs, and (2) still
+                # sources ALL of the user's real startup files (.zshenv,
+                # .zprofile, .zshrc, .zlogin) so nothing they configured is
+                # skipped. Only the fpath array is touched (not the FPATH env
+                # var) so zsh's default fpath (colors/promptinit/etc.) survives.
+                # If the wrapper cannot be written, fall back to a plain login
+                # zsh (no completion) so the shell still launches.
+                _ac_zdotdir="/tmp/atcoder-ac-zdotdir-$$"
+                if rm -rf "$_ac_zdotdir" 2>/dev/null \
+                   && mkdir -p "$_ac_zdotdir" 2>/dev/null \
+                   && printf '%s\n' '[ -n "$HOME" ] && [ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv"' > "$_ac_zdotdir/.zshenv" 2>/dev/null \
+                   && printf '%s\n' '[ -n "$HOME" ] && [ -f "$HOME/.zprofile" ] && source "$HOME/.zprofile"' > "$_ac_zdotdir/.zprofile" 2>/dev/null \
+                   && printf '%s\n' 'fpath=("''${ATCODER_ROOT}/completions" $fpath)' '[ -n "$HOME" ] && [ -f "$HOME/.zshrc" ] && source "$HOME/.zshrc"' > "$_ac_zdotdir/.zshrc" 2>/dev/null \
+                   && printf '%s\n' '[ -n "$HOME" ] && [ -f "$HOME/.zlogin" ] && source "$HOME/.zlogin"' > "$_ac_zdotdir/.zlogin" 2>/dev/null; then
+                  ZDOTDIR="$_ac_zdotdir" exec ${pkgs.zsh}/bin/zsh -l
+                fi
                 exec ${pkgs.zsh}/bin/zsh -l
               fi
             '';
